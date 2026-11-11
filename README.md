@@ -12,8 +12,9 @@ your machine, and the vision model runs in [Ollama](https://ollama.com).
 **Watcher** (`src/watcher`)
 
 - Scans automatically when paper is loaded into the document feeder (eSCL / AirScan).
-- Appears on the printer panel under Scan → Computer (WSD), so pressing Start
-  there scans to this machine, from the feeder or the glass.
+- Appears on the printer panel under Scan → Computer (WSD), listed by this
+  computer's hostname (`--wsd-name` changes it), so pressing Start there scans
+  to this machine, from the feeder or the glass.
 - Saves each scan as JPEG pages plus a `.ron` metadata file (device, settings,
   page sizes, checksums).
 
@@ -93,8 +94,15 @@ Scan settings (`--dpi`, `--color`, `--paper`, `--format`, `--intent`) go after
 `--help` for the full list.
 
 For panel scanning the printer connects back to this machine on port 5309
-(`--wsd-port`), so that port must be open to it. Use `--no-wsd` to only watch
-the feeder.
+(`--wsd-port`), so that port must be open to it; otherwise the panel shows a
+communication error. scanai logs an error at startup when ufw is blocking the
+port (other firewalls are not checked). With ufw, for example:
+
+```sh
+sudo ufw allow from 192.168.1.50 to any port 5309 proto tcp
+```
+
+Use `--no-wsd` to only watch the feeder.
 
 ## Output
 

@@ -2,6 +2,7 @@
 //! every scan with metadata.
 
 mod escl;
+mod firewall;
 mod store;
 mod wsd;
 
@@ -80,7 +81,8 @@ pub struct WatchOpts {
     #[arg(long, default_value_t = 2000)]
     settle_ms: u64,
     /// Name shown for this computer under Scan → Computer (WSD) on the printer panel
-    #[arg(long, default_value = "scanai")]
+    /// [default: this computer's hostname]
+    #[arg(long, default_value_t = hostname(), hide_default_value = true)]
     wsd_name: String,
     /// Port the printer sends panel scan requests to
     #[arg(long, default_value_t = 5309)]
@@ -191,6 +193,15 @@ impl Color {
             Color::Gray => "Grayscale8",
             Color::Bw => "BlackAndWhite1",
         }
+    }
+}
+
+/// This computer's name without any domain part ("beige", not "beige.local").
+fn hostname() -> String {
+    let name = gethostname::gethostname().to_string_lossy().into_owned();
+    match name.split('.').next().map(str::trim) {
+        Some(short) if !short.is_empty() => short.to_string(),
+        _ => "scanai".into(),
     }
 }
 
@@ -590,7 +601,10 @@ impl App {
 
         if !w.no_wsd {
             match wsd::Runtime::start(&self.escl.host(), w.wsd_port, &w.wsd_name) {
-                Ok(rt) => self.wsd = Some(rt),
+                Ok(rt) => {
+                    self.wsd = Some(rt);
+                    firewall::check(&self.escl.host(), w.wsd_port);
+                }
                 Err(e) => warn!("panel scanning (WSD) is off: {e:#}"),
             }
         }
