@@ -2,6 +2,9 @@
 name = "scanai"
 version = "0.1.0"
 edition = "2024"
+description = "Watches a network scanner, saves every scan, then OCRs and classifies it with a local vision model"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/rvdende/scanai"
 
 [dependencies]
 anyhow = "1.0.104"
