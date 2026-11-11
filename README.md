@@ -33,7 +33,7 @@ The watcher starts post-processing after each scan, so running `scanai` does bot
 
 - A scanner that speaks eSCL over HTTPS. Developed and tested with an Epson
   L5290 only; panel scanning also needs WSD (WS-Scan).
-- Rust 1.88 or newer.
+- Rust 1.95 or newer.
 - [Ollama](https://ollama.com) with a vision model. The default is `qwen3-vl:8b`:
 
   ```sh
@@ -45,23 +45,32 @@ The OCR models are downloaded automatically the first time post-processing runs.
 ## Setup
 
 ```sh
-cp .env.example .env    # then set SCANAI_HOST to your scanner's address
-cargo build --release
+cargo install scanai
 ```
 
-| Variable        | Meaning                                  | Default                  |
-|-----------------|------------------------------------------|--------------------------|
-| `SCANAI_HOST`   | Scanner IP address or hostname           | none (required)          |
-| `SCANAI_OLLAMA` | Ollama server used for classification    | `http://localhost:11434` |
+Or build from a checkout with `cargo build --release`; the binary is then
+`target/release/scanai`.
 
-`.env` is read from the directory you run in (or one above it), then from the
-project directory. Real environment variables and command-line options take
-precedence.
+Pick a directory for scanai to work in and put a `.env` file there with your
+scanner's address (see [.env.example](.env.example)):
+
+```sh
+SCANAI_HOST=192.168.1.50
+```
+
+| Variable        | Meaning                                  | Default                         |
+|-----------------|------------------------------------------|---------------------------------|
+| `SCANAI_HOST`   | Scanner IP address or hostname           | none (required)                 |
+| `SCANAI_OLLAMA` | Ollama server used for classification    | `http://localhost:11434`        |
+| `SCANAI_DATA`   | Where scans and results are kept         | `data` in the current directory |
+
+`.env` is read from the directory you run in, or one above it. Real environment
+variables and command-line options take precedence.
 
 Check that the scanner is reachable:
 
 ```sh
-target/release/scanai watcher status
+scanai watcher status
 ```
 
 ## Usage
@@ -89,8 +98,9 @@ the feeder.
 
 ## Output
 
-By default scans are written to `data/` in the checkout (`--out` and `--raw`
-change this). A scan's id is the local time it started.
+By default scans are written to `data/` in the directory you run in. Set
+`SCANAI_DATA` to keep them somewhere else, or use `--out` and `--raw` for the
+individual folders. A scan's id is the local time it started.
 
 ```
 data/scanned_raw/<id>.ron         scan metadata
@@ -106,15 +116,16 @@ Pieces split from one scan are filed as `<id>_a`, `<id>_b`, and so on.
 
 ## Running as a service
 
-A systemd user unit, saved as `~/.config/systemd/user/scanai.service` (adjust
-the path to your checkout):
+A systemd user unit, saved as `~/.config/systemd/user/scanai.service`. Point
+`WorkingDirectory` at the directory holding your `.env`:
 
 ```ini
 [Unit]
 Description=Scan and file documents loaded into the scanner
 
 [Service]
-ExecStart=%h/scanai/target/release/scanai watcher watch
+WorkingDirectory=%h/scanai
+ExecStart=%h/.cargo/bin/scanai watcher watch
 Restart=always
 RestartSec=10
 

@@ -10,7 +10,7 @@ mod postprocess;
 mod watcher;
 
 use std::ffi::OsString;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 use log::error;
@@ -30,20 +30,20 @@ enum Cmd {
     Postprocess(postprocess::Cli),
 }
 
-/// `data/<name>` next to the source.
+/// `<data>/<name>`, where `<data>` is `$SCANAI_DATA`, or `data` in the current directory.
 pub fn data_dir(name: &str) -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("data").join(name)
+    let data = std::env::var_os("SCANAI_DATA")
+        .filter(|d| !d.is_empty())
+        .map_or_else(|| PathBuf::from("data"), PathBuf::from);
+    std::path::absolute(&data).unwrap_or(data).join(name)
 }
 
-/// Addresses that don't belong in the source come from `.env` (see `.env.example`):
-/// the one in or above the current directory, then the one next to the source.
-/// Variables already set in the environment win.
+/// Addresses that don't belong in the source come from `.env` (see `.env.example`)
+/// in or above the current directory. Variables already set in the environment win.
 fn load_env() {
-    let results = [
-        dotenvy::dotenv().map(drop),
-        dotenvy::from_path(Path::new(env!("CARGO_MANIFEST_DIR")).join(".env")),
-    ];
-    for e in results.into_iter().filter_map(Result::err).filter(|e| !e.not_found()) {
+    if let Err(e) = dotenvy::dotenv()
+        && !e.not_found()
+    {
         eprintln!("warning: ignoring .env: {e}");
     }
 }
