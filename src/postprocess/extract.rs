@@ -329,7 +329,15 @@ impl Extractor {
     }
 
     /// One non-streaming chat call; returns the answer text and the raw response.
-    fn chat(&self, messages: Value, format: Value) -> Result<(String, Value)> {
+    fn chat(&self, mut messages: Value, format: Value) -> Result<(String, Value)> {
+        // qwen3-vl always opens its answer with a thinking block, whatever `think` says.
+        // Ollama 0.32 applied the format schema from the first token, which cut the
+        // thinking short; 0.40 applies it only after the thinking, which can run for
+        // tens of thousands of tokens. Starting the answer with an already closed
+        // thinking block gives the JSON straight away on both.
+        if let Some(m) = messages.as_array_mut() {
+            m.push(json!({"role": "assistant", "content": "<think>\n\n</think>\n\n"}));
+        }
         let body = json!({
             "model": self.model,
             "stream": false,
@@ -346,8 +354,8 @@ impl Extractor {
             .with_context(|| format!("is Ollama running at {}?", self.url))?
             .error_for_status()?
             .json()?;
-        // With think=false and a format schema, Ollama (0.32, qwen3-vl) puts the
-        // answer in `thinking` and leaves `content` empty.
+        // Without the closed thinking block above, Ollama 0.32 put the answer in
+        // `thinking` and left `content` empty; keep reading both.
         let content = [&resp["message"]["content"], &resp["message"]["thinking"]]
             .into_iter()
             .filter_map(|v| v.as_str())
