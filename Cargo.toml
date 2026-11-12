@@ -1,6 +1,6 @@
 [package]
 name = "scanai"
-version = "0.1.2"
+version = "0.1.3"
 edition = "2024"
 rust-version = "1.95"
 description = "Watches a network scanner, saves every scan, then OCRs and classifies it with a local vision model"
