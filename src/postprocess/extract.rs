@@ -3,7 +3,8 @@
 use std::io::Cursor;
 use std::time::{Duration, Instant};
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow};
+use log::warn;
 use base64::Engine;
 use chrono::NaiveDate;
 use image::RgbImage;
@@ -188,6 +189,11 @@ pub struct Known {
     pub by_detail: std::collections::HashMap<String, (String, Vec<String>)>,
 }
 
+struct ChatError {
+    error: anyhow::Error,
+    transient: bool,
+}
+
 pub struct Extractor {
     http: reqwest::blocking::Client,
     pub url: String,
@@ -346,14 +352,23 @@ impl Extractor {
             "options": {"temperature": 0, "num_ctx": 32768},
             "messages": messages,
         });
-        let resp: Value = self
-            .http
-            .post(format!("{}/api/chat", self.url))
-            .json(&body)
-            .send()
-            .with_context(|| format!("is Ollama running at {}?", self.url))?
-            .error_for_status()?
-            .json()?;
+        // Ollama answers 500 when its model runner dies, which llama-server now and
+        // then does while loading the model; the next request starts a fresh runner.
+        // The same goes for Ollama restarting. So try again before giving up.
+        const WAITS: [u64; 3] = [5, 20, 60];
+        let mut attempt = 0;
+        let resp: Value = loop {
+            let err = match self.post(&body) {
+                Ok(resp) => break resp,
+                Err(e) => e,
+            };
+            let Some(wait) = WAITS.get(attempt).filter(|_| err.transient) else {
+                return Err(err.error);
+            };
+            attempt += 1;
+            warn!("{:#}; trying again in {wait} s ({attempt} of {})", err.error, WAITS.len());
+            std::thread::sleep(Duration::from_secs(*wait));
+        };
         // Without the closed thinking block above, Ollama 0.32 put the answer in
         // `thinking` and left `content` empty; keep reading both.
         let content = [&resp["message"]["content"], &resp["message"]["thinking"]]
@@ -363,6 +378,30 @@ impl Extractor {
             .context("Ollama returned an empty message")?
             .to_string();
         Ok((content, resp))
+    }
+
+    /// Sends one chat request. A failure is `transient` when the same request may
+    /// well succeed a little later: Ollama unreachable, or a 5xx answer.
+    fn post(&self, body: &Value) -> Result<Value, ChatError> {
+        let url = format!("{}/api/chat", self.url);
+        let resp = self.http.post(&url).json(body).send().map_err(|e| ChatError {
+            transient: e.is_connect(),
+            error: anyhow::Error::new(e).context(format!("is Ollama running at {}?", self.url)),
+        })?;
+        let status = resp.status();
+        if !status.is_success() {
+            // Ollama says what went wrong in the body, as {"error": "..."}.
+            let text = resp.text().unwrap_or_default();
+            let reason = serde_json::from_str::<Value>(&text)
+                .ok()
+                .and_then(|v| v["error"].as_str().map(str::to_owned))
+                .unwrap_or(text);
+            return Err(ChatError {
+                transient: status.is_server_error(),
+                error: anyhow!("Ollama answered {status} for {url}: {reason:.500}"),
+            });
+        }
+        resp.json().map_err(|e| ChatError { transient: false, error: e.into() })
     }
 
     fn encode(&self, page: &RgbImage) -> Result<String> {
