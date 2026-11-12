@@ -1,0 +1,39 @@
+# Publishes the crate to crates.io when a version tag (v1.2.3) is pushed.
+#
+# There is no API token: crates.io trusts this workflow directly ("trusted
+# publishing"). That is set up once on crates.io, under the crate's
+# Settings → Trusted Publishing, with repository rvdende/scanai and workflow
+# file publish.yml.
+name: Publish to crates.io
+
+on:
+  push:
+    tags: ["v[0-9]+.[0-9]+.[0-9]+*"]
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # lets crates.io verify that this run is this workflow
+    steps:
+      - uses: actions/checkout@v4
+
+      # The runner's Rust can lag behind the rust-version in Cargo.toml.
+      - run: rustup update stable --no-self-update && rustup default stable
+
+      - name: Check that the tag matches the version in Cargo.toml
+        run: |
+          version=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].version')
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match Cargo.toml version $version"
+            exit 1
+          fi
+
+      - uses: rust-lang/crates-io-auth-action@v1
+        id: auth
+
+      # Builds the packaged crate before uploading it, so a broken release stops here.
+      - run: cargo publish --locked
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
