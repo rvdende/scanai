@@ -1,5 +1,10 @@
-//! Watches an eSCL scanner's document feeder (and its panel, via WSD) and saves
-//! every scan with metadata.
+//! Scans to this machine from the printer panel (via WSD), and optionally whenever
+//! paper is loaded in the document feeder (eSCL), and saves every scan with metadata.
+//!
+//! Watching the feeder means asking the scanner for its status, and every such
+//! question wakes it and makes it move its carriage about a minute later. Panel
+//! scanning only waits for the printer to call us, so the scanner can sleep; that
+//! is why feeder watching is off by default.
 
 mod escl;
 mod firewall;
@@ -58,7 +63,8 @@ struct Opts {
 
 #[derive(Subcommand)]
 pub enum Cmd {
-    /// Scan whenever paper is loaded in the top feeder or Start is pressed on the panel (the default)
+    /// Scan whenever Start is pressed on the printer panel, and with --watch-feeder
+    /// when paper is loaded in the top feeder (the default)
     Watch(WatchOpts),
     /// Scan once right now and exit
     Once {
@@ -74,10 +80,16 @@ pub enum Cmd {
 
 #[derive(Args, Clone)]
 pub struct WatchOpts {
-    /// How often to ask the scanner whether the feeder has paper (ms)
+    /// Also scan as soon as paper is loaded in the top feeder. This asks the scanner
+    /// about the feeder every --poll-ms, and each question wakes it and makes it
+    /// move its carriage, so it never sleeps and is noisy while idle.
+    #[arg(long)]
+    watch_feeder: bool,
+    /// With --watch-feeder: how often to ask the scanner whether the feeder has paper (ms)
     #[arg(long, default_value_t = 1000)]
     poll_ms: u64,
-    /// Wait this long after paper appears before scanning, so you can finish loading the stack (ms)
+    /// With --watch-feeder: wait this long after paper appears before scanning,
+    /// so you can finish loading the stack (ms)
     #[arg(long, default_value_t = 2000)]
     settle_ms: u64,
     /// Name shown for this computer under Scan → Computer (WSD) on the printer panel
@@ -87,7 +99,7 @@ pub struct WatchOpts {
     /// Port the printer sends panel scan requests to
     #[arg(long, default_value_t = 5309)]
     wsd_port: u16,
-    /// Don't register on the printer panel; only watch the feeder
+    /// Don't register on the printer panel (needs --watch-feeder)
     #[arg(long)]
     no_wsd: bool,
     /// Don't post-process saved scans
@@ -559,6 +571,11 @@ impl App {
     }
 
     fn watch(&mut self, w: &WatchOpts) -> Result<()> {
+        if w.no_wsd && !w.watch_feeder {
+            bail!(
+                "nothing to watch: --no-wsd turns off panel scanning, and the feeder is only watched with --watch-feeder"
+            );
+        }
         let stop = Arc::new(AtomicBool::new(false));
         {
             let stop = stop.clone();
@@ -605,17 +622,15 @@ impl App {
                     self.wsd = Some(rt);
                     firewall::check(&self.escl.host(), w.wsd_port);
                 }
-                Err(e) => warn!("panel scanning (WSD) is off: {e:#}"),
+                Err(e) if w.watch_feeder => warn!("panel scanning (WSD) is off: {e:#}"),
+                Err(e) => {
+                    return Err(e.context(
+                        "can't offer panel scanning (WSD), and the feeder is only watched with --watch-feeder",
+                    ));
+                }
             }
         }
 
-        let poll = Duration::from_millis(w.poll_ms);
-        let settle = Duration::from_millis(w.settle_ms);
-        // Scan when paper is loaded, then wait for the feeder to empty before scanning again,
-        // so a jammed or refused stack isn't rescanned in a loop.
-        let mut armed = true;
-        let mut last_adf: Option<String> = None;
-        let mut failures = 0u32;
         if w.no_postprocess {
             info!("post-processing is off");
         } else {
@@ -634,6 +649,33 @@ impl App {
                 Err(e) => warn!("post-processing is off: can't find this program's own path: {e}"),
             }
         }
+
+        if w.watch_feeder {
+            self.watch_feeder(w, &stop);
+        } else {
+            info!(
+                "waiting for scans started from the printer panel; the feeder isn't watched, \
+                 so the scanner can sleep (--watch-feeder scans as soon as paper is loaded)"
+            );
+            while !self.idle(&stop, Duration::from_secs(1)) {}
+        }
+        if let Some(rt) = self.wsd.take() {
+            rt.stop();
+        }
+        info!("stopped");
+        Ok(())
+    }
+
+    /// Scan when paper is loaded in the feeder, until a stop is requested. Panel
+    /// requests are still handled while waiting.
+    fn watch_feeder(&mut self, w: &WatchOpts, stop: &AtomicBool) {
+        let poll = Duration::from_millis(w.poll_ms);
+        let settle = Duration::from_millis(w.settle_ms);
+        // Scan when paper is loaded, then wait for the feeder to empty before scanning again,
+        // so a jammed or refused stack isn't rescanned in a loop.
+        let mut armed = true;
+        let mut last_adf: Option<String> = None;
+        let mut failures = 0u32;
         info!("watching the document feeder (poll {poll:?}, settle {settle:?})");
 
         while !stop.load(Ordering::SeqCst) {
@@ -653,7 +695,7 @@ impl App {
                         debug!("status poll failed: {e:#}");
                     }
                     let backoff = if failures >= 3 { Duration::from_secs(5) } else { poll };
-                    if self.idle(&stop, backoff) {
+                    if self.idle(stop, backoff) {
                         break;
                     }
                     continue;
@@ -669,7 +711,7 @@ impl App {
                 armed = true;
             } else if armed && st.state == "Idle" {
                 info!("paper detected in the feeder; scanning in {settle:?}");
-                if self.idle(&stop, settle) {
+                if self.idle(stop, settle) {
                     break;
                 }
                 match self.escl.status() {
@@ -693,7 +735,7 @@ impl App {
                     }
                     Ok(Outcome::Rejected(StatusCode::SERVICE_UNAVAILABLE, _)) => {
                         info!("scanner busy; will retry");
-                        if self.idle(&stop, Duration::from_secs(5)) {
+                        if self.idle(stop, Duration::from_secs(5)) {
                             break;
                         }
                         continue;
@@ -716,15 +758,10 @@ impl App {
                 }
                 continue;
             }
-            if self.idle(&stop, poll) {
+            if self.idle(stop, poll) {
                 break;
             }
         }
-        if let Some(rt) = self.wsd.take() {
-            rt.stop();
-        }
-        info!("stopped");
-        Ok(())
     }
 
     /// Wait up to `d`, handling panel scan requests as they arrive.

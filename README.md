@@ -11,10 +11,12 @@ your machine, and the vision model runs in [Ollama](https://ollama.com).
 
 **Watcher** (`src/watcher`)
 
-- Scans automatically when paper is loaded into the document feeder (eSCL / AirScan).
 - Appears on the printer panel under Scan → Computer (WSD), listed by this
   computer's hostname (`--wsd-name` changes it), so pressing Start there scans
   to this machine, from the feeder or the glass.
+- Optionally (`--watch-feeder`) scans as soon as paper is loaded into the
+  document feeder (eSCL / AirScan). See [Feeder watching](#feeder-watching)
+  for why this is off by default.
 - Saves each scan as JPEG pages plus a `.ron` metadata file (device, settings,
   page sizes, checksums).
 
@@ -77,7 +79,8 @@ scanai watcher status
 ## Usage
 
 ```sh
-scanai                          # watch the scanner and post-process every scan
+scanai                          # scan from the printer panel and post-process every scan
+scanai watcher watch --watch-feeder   # also scan when paper is loaded in the feeder
 scanai watcher once             # scan the feeder once and exit
 scanai watcher once --source platen
 scanai watcher status           # scanner details and current state
@@ -102,7 +105,21 @@ port (other firewalls are not checked). With ufw, for example:
 sudo ufw allow from 192.168.1.50 to any port 5309 proto tcp
 ```
 
-Use `--no-wsd` to only watch the feeder.
+Use `--no-wsd --watch-feeder` to only watch the feeder.
+
+### Feeder watching
+
+By default scanai only waits for the printer panel, and sends the scanner
+nothing while idle apart from renewing its panel entry every ten minutes, so
+the scanner can go to sleep.
+
+`--watch-feeder` also starts a scan as soon as paper is loaded in the top
+feeder. The only way to notice paper is to ask the scanner for its status
+(every `--poll-ms`, default one second), and on the Epson L5290 every status
+request wakes the scanner, which then moves its carriage about a minute later.
+While the feeder is watched the scanner never sleeps and runs that carriage
+cycle about every 70 seconds. Asking less often doesn't help: each request
+still causes one cycle.
 
 ## Output
 
