@@ -1,6 +1,7 @@
 //! scanai: scans whatever is put in the scanner and files it.
 //!
-//! - `watcher`: watches the scanner's feeder and panel and saves every scan with metadata.
+//! - `watcher`: scans from the printer panel (and optionally the feeder) and saves every
+//!   scan with metadata.
 //! - `postprocess`: turns the saved pages upright, OCRs them, and has a local vision
 //!   model work out what each document is.
 //!
@@ -24,7 +25,7 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
-    /// Watch the scanner's feeder and panel and save every scan (the default)
+    /// Scan from the printer panel (and with --watch-feeder, the feeder) and save every scan (the default)
     Watcher(watcher::Cli),
     /// Turn scans upright, OCR them, and extract what they are with a local vision model
     Postprocess(postprocess::Cli),
