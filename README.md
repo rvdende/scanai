@@ -66,6 +66,7 @@ SCANAI_HOST=192.168.1.50
 | `SCANAI_HOST`   | Scanner IP address or hostname           | none (required)                 |
 | `SCANAI_OLLAMA` | Ollama server used for classification    | `http://localhost:11434`        |
 | `SCANAI_DATA`   | Where scans and results are kept         | `data` in the current directory |
+| `SCANAI_LOG`    | Log file (a copy of what's printed)      | `<SCANAI_DATA>/scanai.log`      |
 
 `.env` is read from the directory you run in, or one above it. Real environment
 variables and command-line options take precedence.

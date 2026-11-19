@@ -17,7 +17,7 @@ jobs:
       contents: read
       id-token: write # lets crates.io verify that this run is this workflow
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # The runner's Rust can lag behind the rust-version in Cargo.toml.
       - run: rustup update stable --no-self-update && rustup default stable

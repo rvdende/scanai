@@ -11,13 +11,16 @@ mod postprocess;
 mod watcher;
 
 use std::ffi::OsString;
+use std::fs::OpenOptions;
+use std::io::Write;
 use std::path::PathBuf;
+use std::sync::Mutex;
 
 use clap::{Parser, Subcommand};
-use log::error;
+use log::{error, info};
 
 #[derive(Parser)]
-#[command(version, about = "Scan documents as they are loaded into the scanner, then OCR and classify them")]
+#[command(version = concat!(env!("CARGO_PKG_VERSION"), " (", env!("SCANAI_GIT_HASH"), ")"), about = "Scan documents as they are loaded into the scanner, then OCR and classify them")]
 struct Cli {
     #[command(subcommand)]
     cmd: Option<Cmd>,
@@ -49,16 +52,52 @@ fn load_env() {
     }
 }
 
+/// Where the log is also written: `$SCANAI_LOG`, or `<data>/scanai.log`.
+fn log_path() -> PathBuf {
+    std::env::var_os("SCANAI_LOG")
+        .filter(|p| !p.is_empty())
+        .map_or_else(|| data_dir("scanai.log"), PathBuf::from)
+}
+
+/// Logs to stderr as usual, and appends the same lines to [`log_path`].
+fn init_logging() {
+    // journald adds its own timestamps; the file always gets them.
+    let journald = std::env::var_os("JOURNAL_STREAM").is_some();
+    let path = log_path();
+    let file = path
+        .parent()
+        .map_or(Ok(()), std::fs::create_dir_all)
+        .and_then(|()| OpenOptions::new().create(true).append(true).open(&path))
+        .map_err(|e| eprintln!("warning: not writing a log file to {}: {e}", path.display()))
+        .ok()
+        .map(Mutex::new);
+
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info,ort=warn"))
+        .format(move |buf, record| {
+            let ts = buf.timestamp_seconds();
+            let level = record.level();
+            let target = record.module_path().unwrap_or_else(|| record.target());
+            let msg = record.args();
+            if let Some(file) = &file
+                && let Ok(mut f) = file.lock()
+            {
+                // A log line that can't be written to the file shouldn't stop the program.
+                let _ = writeln!(f, "[{ts} {level:<5} {target}] {msg}");
+            }
+            let style = buf.default_level_style(level);
+            if journald {
+                writeln!(buf, "[{style}{level:<5}{style:#} {target}] {msg}")
+            } else {
+                writeln!(buf, "[{ts} {style}{level:<5}{style:#} {target}] {msg}")
+            }
+        })
+        .init();
+}
+
 fn main() {
-    // Before anything reads the environment: .env may also set RUST_LOG.
+    // Before anything reads the environment: .env may also set RUST_LOG and SCANAI_LOG.
     load_env();
-    let mut log = env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info,ort=warn"));
-    log.format_timestamp_secs();
-    if std::env::var_os("JOURNAL_STREAM").is_some() {
-        // journald adds its own timestamps.
-        log.format_timestamp(None);
-    }
-    log.init();
+    init_logging();
 
     let mut cli = Cli::parse();
     // A missing subcommand means `watcher watch`; parse again with it spelled out,
@@ -71,6 +110,9 @@ fn main() {
     if !implied.is_empty() {
         cli = Cli::parse_from(std::env::args_os().chain(implied.iter().map(OsString::from)));
     }
+
+    // After parsing, so --help and --version don't log it.
+    info!("scanai {} ({})", env!("CARGO_PKG_VERSION"), env!("SCANAI_GIT_HASH"));
 
     let result = match cli.cmd.expect("set above") {
         Cmd::Watcher(w) => watcher::run(w),
